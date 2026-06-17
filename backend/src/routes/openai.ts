@@ -236,6 +236,9 @@ router.post('/chat/completions', async (req: Request, res: Response, next: NextF
         return;
       }
 
+      const gatewayCacheStatus = cfResp.headers.get('cf-aig-cache-status') || 'unknown';
+      res.setHeader('cf-aig-cache-status', gatewayCacheStatus);
+
       if (isStream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
@@ -263,14 +266,15 @@ router.post('/chat/completions', async (req: Request, res: Response, next: NextF
         }
         res.end();
         rememberAccountAffinity('ai_neurons', affinity.primary, account);
-        createAuditLog(account.id, 'ai_inference', req.body.model, 'stream via /v1', 'success');
+        createAuditLog(account.id, 'ai_inference', req.body.model,
+          `stream via /v1, gateway_cache: ${gatewayCacheStatus}`, 'success');
       } else {
         const data = await cfResp.json() as any;
         res.json(data);
         rememberAccountAffinity('ai_neurons', affinity.primary, account);
         const cachedTokens = findCachedTokenCount(data?.usage);
         createAuditLog(account.id, 'ai_inference', req.body.model,
-          `tokens: ${data?.usage?.total_tokens || '?'}, cached_tokens: ${cachedTokens ?? 0}`, 'success');
+          `tokens: ${data?.usage?.total_tokens || '?'}, cached_tokens: ${cachedTokens ?? 0}, gateway_cache: ${gatewayCacheStatus}`, 'success');
       }
       return;
     }

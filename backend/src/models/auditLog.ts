@@ -52,6 +52,12 @@ function parseNumber(detail: string | null, key: string): number {
   return Number(match[1].replace(/,/g, '')) || 0;
 }
 
+function parseGatewayCacheStatus(detail: string | null): string {
+  if (!detail) return '';
+  const match = detail.match(/gateway_cache:\s*([a-z]+)/i);
+  return match?.[1]?.toUpperCase() || '';
+}
+
 export function getAiCacheStatsToday(): AiCacheStats {
   const rows = getDb()
     .prepare(
@@ -70,9 +76,10 @@ export function getAiCacheStatsToday(): AiCacheStats {
   for (const row of rows) {
     const total = parseNumber(row.detail, 'tokens');
     const cached = parseNumber(row.detail, 'cached_tokens');
+    const gatewayCacheStatus = parseGatewayCacheStatus(row.detail);
     totalTokens += total;
     cachedTokens += cached;
-    if (cached > 0) cacheHitRequests++;
+    if (cached > 0 || gatewayCacheStatus === 'HIT') cacheHitRequests++;
   }
 
   return {
@@ -80,6 +87,6 @@ export function getAiCacheStatsToday(): AiCacheStats {
     cachedTokens,
     totalRequests: rows.length,
     cacheHitRequests,
-    cacheHitRate: totalTokens > 0 ? Math.round((cachedTokens / totalTokens) * 10000) / 100 : 0,
+    cacheHitRate: rows.length > 0 ? Math.round((cacheHitRequests / rows.length) * 10000) / 100 : 0,
   };
 }

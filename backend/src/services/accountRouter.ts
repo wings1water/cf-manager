@@ -61,6 +61,7 @@ export async function findAccountByDomain(domain: string): Promise<{ account: Ac
 }
 
 const AI_NEURON_LIMIT = 10000;
+const AI_NEURON_AFFINITY_LIMIT = 9000;
 
 const RESOURCE_FEATURE_MAP: Record<ResourceType, AccountFeature> = {
   ai_neurons: 'ai',
@@ -140,6 +141,16 @@ export async function getAccountsByPriority(resource: ResourceType): Promise<Acc
     .map(r => r.account);
 }
 
+async function canKeepAiAffinity(account: Account): Promise<boolean> {
+  try {
+    const usage = await getAiUsageToday(account);
+    return usage.totalNeurons < AI_NEURON_AFFINITY_LIMIT;
+  } catch (err) {
+    appLogger.warn(`[AI] Skip affinity for ${account.name}; failed to refresh usage: ${err}`);
+    return false;
+  }
+}
+
 export async function getAccountsByPriorityWithAffinity(
   resource: ResourceType,
   affinityKey?: string,
@@ -153,21 +164,28 @@ export async function getAccountsByPriorityWithAffinity(
   const cachedAccount = cachedAccountId ? accounts.find(account => account.id === cachedAccountId) : undefined;
 
   if (cachedAccount) {
-    return [
-      cachedAccount,
-      ...accounts.filter(account => account.id !== cachedAccount.id),
-    ];
+    if (resource !== 'ai_neurons' || await canKeepAiAffinity(cachedAccount)) {
+      return [
+        cachedAccount,
+        ...accounts.filter(account => account.id !== cachedAccount.id),
+      ];
+    }
+    appLogger.warn(`[AI] Affinity account ${cachedAccount.name} is near daily neuron limit; rotating to next account`);
+    affinityCache.del(cacheKey);
   }
 
   if (fallbackAffinityKey && fallbackAffinityKey !== affinityKey) {
     const fallbackAccountId = affinityCache.get<number>(`affinity_${resource}_${fallbackAffinityKey}`);
     const fallbackAccount = fallbackAccountId ? accounts.find(account => account.id === fallbackAccountId) : undefined;
     if (fallbackAccount) {
-      affinityCache.set(cacheKey, fallbackAccount.id);
-      return [
-        fallbackAccount,
-        ...accounts.filter(account => account.id !== fallbackAccount.id),
-      ];
+      if (resource !== 'ai_neurons' || await canKeepAiAffinity(fallbackAccount)) {
+        affinityCache.set(cacheKey, fallbackAccount.id);
+        return [
+          fallbackAccount,
+          ...accounts.filter(account => account.id !== fallbackAccount.id),
+        ];
+      }
+      appLogger.warn(`[AI] Fallback affinity account ${fallbackAccount.name} is near daily neuron limit; rotating to next account`);
     }
   }
 
