@@ -24,6 +24,8 @@ function isNeuronLimitError(text: string): boolean {
 interface AiAffinityIds {
   primary: string;
   fallback?: string;
+  promptCache: string;
+  source: string;
 }
 
 function hashAffinity(value: string): string {
@@ -59,7 +61,11 @@ function extractTurnMetadataSession(req: Request): string {
   if (typeof rawTurnMetadata === 'string') {
     try {
       const turnMetadata = JSON.parse(rawTurnMetadata);
-      return turnMetadata.prompt_cache_key || turnMetadata.window_id || turnMetadata.turn_id || '';
+      return turnMetadata.prompt_cache_key ||
+        turnMetadata.window_id ||
+        turnMetadata.session_id ||
+        turnMetadata.conversation_id ||
+        '';
     } catch {
       return rawTurnMetadata;
     }
@@ -67,48 +73,46 @@ function extractTurnMetadataSession(req: Request): string {
   return '';
 }
 
-function extractExplicitSessionId(req: Request): string {
+function extractStableSessionId(req: Request): { id: string; source: string } | undefined {
+  const turnMetadataSession = extractTurnMetadataSession(req);
+  if (turnMetadataSession) return { id: `codex:${turnMetadataSession}`, source: 'client_metadata' };
+
+  if (typeof req.body?.prompt_cache_key === 'string' && req.body.prompt_cache_key) {
+    return { id: `cache:${req.body.prompt_cache_key}`, source: 'prompt_cache_key' };
+  }
+
+  if (typeof req.body?.conversation_id === 'string' && req.body.conversation_id) {
+    return { id: `conv:${req.body.conversation_id}`, source: 'conversation_id' };
+  }
+
   const userId = req.body?.metadata?.user_id;
   if (typeof userId === 'string' && userId) {
     const match = userId.match(/_session_([a-f0-9-]+)$/i);
-    if (match?.[1]) return `claude:${match[1]}`;
+    if (match?.[1]) return { id: `claude:${match[1]}`, source: 'metadata.user_id' };
     if (userId.trim().startsWith('{')) {
       try {
         const parsed = JSON.parse(userId);
-        if (parsed.session_id) return `claude:${parsed.session_id}`;
+        if (parsed.session_id) return { id: `claude:${parsed.session_id}`, source: 'metadata.user_id' };
       } catch {
-        return `user:${userId}`;
+        return { id: `user:${userId}`, source: 'metadata.user_id' };
       }
     }
-    return `user:${userId}`;
+    return { id: `user:${userId}`, source: 'metadata.user_id' };
   }
 
   const headerSession =
     req.get('x-session-id') ||
     req.get('session-id') ||
-    req.get('session_id') ||
-    req.get('x-client-request-id');
-  if (headerSession) return `header:${headerSession}`;
+    req.get('session_id');
+  if (headerSession) return { id: `header:${headerSession}`, source: 'session_header' };
 
-  const turnMetadataSession = extractTurnMetadataSession(req);
-  if (turnMetadataSession) return `codex:${turnMetadataSession}`;
-
-  if (typeof req.body?.prompt_cache_key === 'string' && req.body.prompt_cache_key) {
-    return `cache:${req.body.prompt_cache_key}`;
-  }
-
-  if (typeof req.body?.conversation_id === 'string' && req.body.conversation_id) {
-    return `conv:${req.body.conversation_id}`;
-  }
-
-  return '';
+  return undefined;
 }
 
-function extractMessageAffinityIds(req: Request): { primary: string; fallback?: string } | undefined {
+function extractMessagePrefixAffinity(req: Request): string | undefined {
   const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
   let systemPrompt = '';
   let firstUserMessage = '';
-  let firstAssistantMessage = '';
 
   for (const message of messages) {
     const content = truncateForAffinity(extractTextContent(message?.content));
@@ -116,43 +120,34 @@ function extractMessageAffinityIds(req: Request): { primary: string; fallback?: 
 
     if (message.role === 'system' && !systemPrompt) systemPrompt = content;
     if (message.role === 'user' && !firstUserMessage) firstUserMessage = content;
-    if (message.role === 'assistant' && !firstAssistantMessage) firstAssistantMessage = content;
 
-    if (systemPrompt && firstUserMessage && firstAssistantMessage) break;
+    if (systemPrompt && firstUserMessage) break;
   }
 
   if (!systemPrompt && !firstUserMessage) return undefined;
 
-  const shortId = `msg:${hashAffinity(`${systemPrompt}|${firstUserMessage}|`)}`;
-  if (!firstAssistantMessage) return { primary: shortId };
-
-  return {
-    primary: `msg:${hashAffinity(`${systemPrompt}|${firstUserMessage}|${firstAssistantMessage}`)}`,
-    fallback: shortId,
-  };
+  return `msg-prefix:${hashAffinity(`${systemPrompt}|${firstUserMessage}|`)}`;
 }
 
 function getAiAccountAffinityIds(req: Request): AiAffinityIds {
-  const explicitSession = extractExplicitSessionId(req);
+  const explicitSession = extractStableSessionId(req);
   if (explicitSession) {
-    return { primary: scopedAffinity(req, explicitSession) };
+    const scoped = scopedAffinity(req, explicitSession.id);
+    return { primary: scoped, promptCache: scoped, source: explicitSession.source };
   }
 
-  const messageAffinity = extractMessageAffinityIds(req);
+  const messageAffinity = extractMessagePrefixAffinity(req);
   if (messageAffinity) {
-    return {
-      primary: scopedAffinity(req, messageAffinity.primary),
-      fallback: messageAffinity.fallback ? scopedAffinity(req, messageAffinity.fallback) : undefined,
-    };
+    const scoped = scopedAffinity(req, messageAffinity);
+    return { primary: scoped, promptCache: scoped, source: 'message_prefix' };
   }
 
-  return {
-    primary: scopedAffinity(req, [
-      req.get('authorization') || 'anonymous',
-      req.get('user-agent') || '',
-      req.get('x-forwarded-for') || req.ip || '',
-    ].join('|')),
-  };
+  const fallback = scopedAffinity(req, [
+    req.get('authorization') || 'anonymous',
+    req.get('user-agent') || '',
+    req.get('x-forwarded-for') || req.ip || '',
+  ].join('|'));
+  return { primary: fallback, promptCache: fallback, source: 'request_fingerprint' };
 }
 
 function findCachedTokenCount(value: any): number | undefined {
@@ -205,7 +200,7 @@ router.post('/chat/completions', async (req: Request, res: Response, next: NextF
       const headers = {
         'Content-Type': 'application/json',
         ...getAuthHeaders(account),
-        ...getAiGatewayHeaders(affinity.primary),
+        ...getAiGatewayHeaders(affinity.promptCache),
       };
 
       const cfResp = await proxyFetch(cfUrl, {
@@ -267,14 +262,14 @@ router.post('/chat/completions', async (req: Request, res: Response, next: NextF
         res.end();
         rememberAccountAffinity('ai_neurons', affinity.primary, account);
         createAuditLog(account.id, 'ai_inference', req.body.model,
-          `stream via /v1, gateway_cache: ${gatewayCacheStatus}`, 'success');
+          `stream via /v1, gateway_cache: ${gatewayCacheStatus}, prompt_cache_affinity: ${affinity.source}`, 'success');
       } else {
         const data = await cfResp.json() as any;
         res.json(data);
         rememberAccountAffinity('ai_neurons', affinity.primary, account);
         const cachedTokens = findCachedTokenCount(data?.usage);
         createAuditLog(account.id, 'ai_inference', req.body.model,
-          `tokens: ${data?.usage?.total_tokens || '?'}, cached_tokens: ${cachedTokens ?? 0}, gateway_cache: ${gatewayCacheStatus}`, 'success');
+          `tokens: ${data?.usage?.total_tokens || '?'}, cached_tokens: ${cachedTokens ?? 0}, gateway_cache: ${gatewayCacheStatus}, prompt_cache_affinity: ${affinity.source}`, 'success');
       }
       return;
     }
