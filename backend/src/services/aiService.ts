@@ -1,5 +1,6 @@
 import { Account } from '../models/account';
 import { getCfClient, getAuthHeaders } from './cfFactory';
+import { getAiGatewayHeaders } from './aiGatewayService';
 import { proxyFetch, type FetchResponse } from './proxyService';
 import { appLogger } from './logger';
 
@@ -81,6 +82,7 @@ export async function runInferenceStream(
   const headers = {
     'Content-Type': 'application/json',
     ...getAuthHeaders(account),
+    ...getAiGatewayHeaders(),
   };
 
   // 构建消息列表：历史对话 + 当前用户输入

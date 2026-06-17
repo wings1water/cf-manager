@@ -81,6 +81,7 @@ cp .env.example .env
 
 # 3. 编辑 .env，至少设置 ENCRYPTION_KEY
 #    可选设置 API_SECRET（管理界面登录密码）、PROXY_URL（代理地址）
+#    AI Gateway 缓存也可以部署后在设置页面统一配置
 
 # 4. 一键部署
 chmod +x deploy.sh
@@ -96,7 +97,36 @@ chmod +x deploy.sh
 | `ENCRYPTION_KEY` | 是 | 加密存储 API Token 的密钥（任意随机字符串，至少 16 位） |
 | `API_SECRET` | 否 | 管理界面访问密码，留空则无需登录 |
 | `PROXY_URL` | 否 | HTTP/SOCKS5 代理地址，如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080` |
+| `AI_GATEWAY_ID` | 否 | Cloudflare AI Gateway ID 默认值；也可以在设置页面动态配置 |
+| `AI_GATEWAY_CACHE_TTL` | 否 | AI Gateway 缓存 TTL 默认值，单位秒；也可以在设置页面动态配置 |
 | `APP_PORT` | 否 | 对外暴露端口，默认 `3000` |
+
+### 统一管理 AI Gateway 缓存
+
+项目支持在设置页面统一创建或更新所有已启用 AI 功能账号下的同名 AI Gateway。
+
+1. 确认 Cloudflare 凭证包含 `AI Gateway Write` 权限。
+2. 进入项目 `设置 -> AI Gateway 统一管理`。
+3. 填写 Gateway ID、缓存 TTL、日志和限流参数。
+4. 点击 `同步到所有 AI 账号`。
+
+也可以通过 `.env` 设置默认值：
+
+```env
+AI_GATEWAY_ID=default
+AI_GATEWAY_CACHE_TTL=600
+```
+
+修改 `.env` 后需要重启服务；在设置页面保存则会写入数据库并立即影响新的 AI 请求：
+
+```bash
+docker compose up -d --build
+```
+
+说明：
+
+- 当前项目会在多个 Cloudflare 账号之间切换可用账号，而 Gateway 是账号级资源；统一同步会把同名 Gateway 下发到每个已启用 AI 功能的活跃账号。
+- Gateway 缓存只对“完全相同”的请求命中；多轮对话场景如果想进一步省点数，仍建议叠加应用层响应缓存。
 
 ### 本地开发
 

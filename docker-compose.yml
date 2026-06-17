@@ -18,6 +18,8 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - API_SECRET=${API_SECRET:-}
       - PROXY_URL=${PROXY_URL:-}
+      - AI_GATEWAY_ID=${AI_GATEWAY_ID:-}
+      - AI_GATEWAY_CACHE_TTL=${AI_GATEWAY_CACHE_TTL:-}
       - DB_PATH=/app/data/cf-manager.db
     volumes:
       - cf-data:/app/data

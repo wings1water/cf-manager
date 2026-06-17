@@ -7,6 +7,7 @@ import { appLogger } from './logger';
 
 const ZONES_CACHE_TTL = 300; // 5 minutes
 const QUOTA_CACHE_TTL = 60;  // 1 minute
+const AI_AFFINITY_TTL = 21600; // 6 hours
 
 interface Zone {
   id: string;
@@ -17,6 +18,7 @@ interface Zone {
 
 const zonesCache = new NodeCache({ stdTTL: ZONES_CACHE_TTL });
 const quotaCache = new NodeCache({ stdTTL: QUOTA_CACHE_TTL });
+const affinityCache = new NodeCache({ stdTTL: AI_AFFINITY_TTL });
 
 export async function getAllZones(): Promise<Array<Zone & { cfAccountId: number; accountName: string }>> {
   const cacheKey = 'all_zones';
@@ -138,7 +140,53 @@ export async function getAccountsByPriority(resource: ResourceType): Promise<Acc
     .map(r => r.account);
 }
 
+export async function getAccountsByPriorityWithAffinity(
+  resource: ResourceType,
+  affinityKey?: string,
+  fallbackAffinityKey?: string
+): Promise<Account[]> {
+  const accounts = await getAccountsByPriority(resource);
+  if (!affinityKey || accounts.length <= 1) return accounts;
+
+  const cacheKey = `affinity_${resource}_${affinityKey}`;
+  const cachedAccountId = affinityCache.get<number>(cacheKey);
+  const cachedAccount = cachedAccountId ? accounts.find(account => account.id === cachedAccountId) : undefined;
+
+  if (cachedAccount) {
+    return [
+      cachedAccount,
+      ...accounts.filter(account => account.id !== cachedAccount.id),
+    ];
+  }
+
+  if (fallbackAffinityKey && fallbackAffinityKey !== affinityKey) {
+    const fallbackAccountId = affinityCache.get<number>(`affinity_${resource}_${fallbackAffinityKey}`);
+    const fallbackAccount = fallbackAccountId ? accounts.find(account => account.id === fallbackAccountId) : undefined;
+    if (fallbackAccount) {
+      affinityCache.set(cacheKey, fallbackAccount.id);
+      return [
+        fallbackAccount,
+        ...accounts.filter(account => account.id !== fallbackAccount.id),
+      ];
+    }
+  }
+
+  affinityCache.set(cacheKey, accounts[0].id);
+  return accounts;
+}
+
+export function rememberAccountAffinity(resource: ResourceType, affinityKey: string | undefined, account: Account): void {
+  if (!affinityKey) return;
+  affinityCache.set(`affinity_${resource}_${affinityKey}`, account.id);
+}
+
+export function clearAccountAffinity(resource: ResourceType, affinityKey?: string): void {
+  if (!affinityKey) return;
+  affinityCache.del(`affinity_${resource}_${affinityKey}`);
+}
+
 export function clearCache(): void {
   zonesCache.flushAll();
   quotaCache.flushAll();
+  affinityCache.flushAll();
 }

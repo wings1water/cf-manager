@@ -5,6 +5,34 @@
       <n-tag size="small" type="info">今日额度</n-tag>
     </n-space>
 
+    <n-grid :cols="statsGridCols" :x-gap="12" :y-gap="12" responsive="screen" style="margin-top: 16px">
+      <n-gi>
+        <n-card size="small" title="AI 缓存命中率">
+          <n-statistic :value="cacheStats.cacheHitRate" suffix="%" />
+          <n-progress
+            type="line"
+            :percentage="Math.min(100, cacheStats.cacheHitRate || 0)"
+            :height="10"
+            :show-indicator="false"
+            :status="cacheStats.cacheHitRate > 0 ? 'success' : 'default'"
+            style="margin-top: 8px"
+          />
+        </n-card>
+      </n-gi>
+      <n-gi>
+        <n-card size="small" title="缓存 Token">
+          <n-statistic :value="cacheStats.cachedTokens" />
+          <n-text depth="3" style="font-size: 12px">总 Token {{ formatNumber(cacheStats.totalTokens) }}</n-text>
+        </n-card>
+      </n-gi>
+      <n-gi>
+        <n-card size="small" title="命中请求">
+          <n-statistic :value="cacheStats.cacheHitRequests" />
+          <n-text depth="3" style="font-size: 12px">总请求 {{ formatNumber(cacheStats.totalRequests) }}</n-text>
+        </n-card>
+      </n-gi>
+    </n-grid>
+
     <n-spin :show="quotaStore.loading" style="margin-top: 16px">
       <n-grid v-if="quotaWithResources.length > 0" :cols="gridCols" :x-gap="12" :y-gap="12" responsive="screen">
         <n-gi v-for="acct in quotaWithResources" :key="acct.accountId">
@@ -57,6 +85,14 @@ const gridCols = computed(() => {
 });
 const auditLogs = ref<any[]>([]);
 const loadingLogs = ref(false);
+const cacheStats = ref({
+  totalTokens: 0,
+  cachedTokens: 0,
+  totalRequests: 0,
+  cacheHitRequests: 0,
+  cacheHitRate: 0,
+});
+const statsGridCols = '1 s:2 m:3';
 
 const resourceLabels: Record<string, string> = {
   workers_requests: 'Workers 请求',
@@ -79,6 +115,10 @@ function formatValue(r: any) {
   return `${(r.count || 0).toLocaleString()} / ${(r.limit || 0).toLocaleString()}`;
 }
 
+function formatNumber(value: number) {
+  return (value || 0).toLocaleString();
+}
+
 function calcPercentage(r: any) {
   if (!r.limit) return 0;
   return Math.min(100, Math.round(((r.count || 0) / r.limit) * 100));
@@ -97,8 +137,12 @@ onMounted(async () => {
   quotaStore.fetchQuota();
   loadingLogs.value = true;
   try {
-    const { data } = await apiClient.get('/audit-log');
-    auditLogs.value = data;
+    const [{ data: logs }, { data: stats }] = await Promise.all([
+      apiClient.get('/audit-log'),
+      apiClient.get('/ai-cache-stats'),
+    ]);
+    auditLogs.value = logs;
+    cacheStats.value = stats;
   } finally {
     loadingLogs.value = false;
   }

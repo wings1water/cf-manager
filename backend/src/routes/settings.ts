@@ -3,6 +3,7 @@ import { config } from '../config';
 import { clearCache } from '../services/accountRouter';
 import { clearClientCache } from '../services/cfFactory';
 import { getProxyUrl, setProxyUrl, testProxyConnection } from '../services/proxyService';
+import { getAiGatewaySettings, saveAiGatewaySettings, syncAiGatewayToAllAccounts } from '../services/aiGatewayService';
 
 const router = Router();
 
@@ -12,6 +13,7 @@ router.get('/', (_req, res) => {
     api_secret_configured: !!config.apiSecret,
     db_path: config.dbPath,
     proxy_url: getProxyUrl(),
+    ai_gateway: getAiGatewaySettings(),
   });
 });
 
@@ -45,6 +47,18 @@ router.post('/proxy/test', async (req, res) => {
   } catch (err: any) {
     res.status(502).json({ error: { code: 'PROXY_TEST_FAILED', message: err.message || 'Proxy test failed' } });
   }
+});
+
+router.put('/ai-gateway', (req, res) => {
+  const settings = saveAiGatewaySettings(req.body || {});
+  res.json(settings);
+});
+
+router.post('/ai-gateway/sync', async (req, res, next) => {
+  try {
+    const result = await syncAiGatewayToAllAccounts(req.body || {});
+    res.json(result);
+  } catch (err) { next(err); }
 });
 
 export default router;

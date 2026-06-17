@@ -16,7 +16,7 @@ import tasksRouter from './routes/tasks';
 import openaiRouter from './routes/openai';
 import externalBrowserRenderRouter from './routes/externalBrowserRender';
 import { getQuotaSummary, syncUsageFromCloudflare } from './services/quotaTracker';
-import { getRecentLogs } from './models/auditLog';
+import { getAiCacheStatsToday, getRecentLogs } from './models/auditLog';
 import { initScheduler } from './services/taskScheduler';
 import { v1RequestLogger } from './middleware/v1Logger';
 import { apiRequestLogger } from './middleware/apiLogger';
@@ -61,6 +61,12 @@ app.get('/api/quota', async (_req, res, next) => {
 app.get('/api/audit-log', (_req, res, next) => {
   try {
     res.json(getRecentLogs(20));
+  } catch (err) { next(err); }
+});
+
+app.get('/api/ai-cache-stats', (_req, res, next) => {
+  try {
+    res.json(getAiCacheStatsToday());
   } catch (err) { next(err); }
 });
 

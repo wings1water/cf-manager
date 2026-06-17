@@ -35,6 +35,48 @@
       </n-space>
     </n-card>
 
+    <n-card title="AI Gateway 统一管理" size="small" style="margin-bottom: 16px">
+      <n-space vertical>
+        <n-alert type="info" :bordered="false">
+          保存后会立即影响新的 AI 请求；点击同步会在所有启用 AI 的活跃账号下创建或更新同名 Gateway。
+        </n-alert>
+        <n-form label-placement="left" label-width="120">
+          <n-form-item label="Gateway ID">
+            <n-input v-model:value="aiGatewayForm.gateway_id" placeholder="例如: default" />
+          </n-form-item>
+          <n-form-item label="缓存 TTL">
+            <n-input-number v-model:value="aiGatewayForm.cache_ttl" :min="0" placeholder="600" style="width: 180px" />
+          </n-form-item>
+          <n-form-item label="采集日志">
+            <n-switch v-model:value="aiGatewayForm.collect_logs" />
+          </n-form-item>
+          <n-form-item label="更新清缓存">
+            <n-switch v-model:value="aiGatewayForm.cache_invalidate_on_update" />
+          </n-form-item>
+          <n-form-item label="限流窗口">
+            <n-input-number v-model:value="aiGatewayForm.rate_limiting_interval" :min="0" placeholder="0" style="width: 180px" />
+          </n-form-item>
+          <n-form-item label="限流请求数">
+            <n-input-number v-model:value="aiGatewayForm.rate_limiting_limit" :min="0" placeholder="0" style="width: 180px" />
+          </n-form-item>
+        </n-form>
+        <n-space>
+          <n-button type="primary" :loading="aiGatewaySaving" @click="saveAiGateway">保存配置</n-button>
+          <n-button type="info" :loading="aiGatewaySyncing" :disabled="!aiGatewayForm.gateway_id" @click="syncAiGateway">
+            同步到所有 AI 账号
+          </n-button>
+        </n-space>
+        <n-data-table
+          v-if="aiGatewayResults.length"
+          :columns="aiGatewayColumns"
+          :data="aiGatewayResults"
+          :bordered="false"
+          size="small"
+          :scroll-x="760"
+        />
+      </n-space>
+    </n-card>
+
     <n-card title="缓存管理" size="small" style="margin-bottom: 16px">
       <n-space>
         <n-button type="warning" @click="handleClearCache" :loading="clearing">清除缓存</n-button>
@@ -151,6 +193,17 @@ const settings = ref<any>({});
 const proxyUrl = ref('');
 const proxySaving = ref(false);
 const proxyTesting = ref(false);
+const aiGatewaySaving = ref(false);
+const aiGatewaySyncing = ref(false);
+const aiGatewayResults = ref<any[]>([]);
+const aiGatewayForm = ref({
+  gateway_id: '',
+  cache_ttl: 600,
+  collect_logs: true,
+  cache_invalidate_on_update: false,
+  rate_limiting_interval: 0,
+  rate_limiting_limit: 0,
+});
 
 async function fetchSettings() {
   loading.value = true;
@@ -158,10 +211,56 @@ async function fetchSettings() {
     const { data } = await settingsApi.get();
     settings.value = data;
     proxyUrl.value = data.proxy_url || '';
+    if (data.ai_gateway) {
+      aiGatewayForm.value = normalizeAiGatewaySettings(data.ai_gateway);
+    }
   } catch {
     settings.value = {};
   } finally {
     loading.value = false;
+  }
+}
+
+function normalizeAiGatewaySettings(data: any) {
+  return {
+    gateway_id: data.gateway_id || '',
+    cache_ttl: Number(data.cache_ttl ?? 600),
+    collect_logs: data.collect_logs !== false,
+    cache_invalidate_on_update: data.cache_invalidate_on_update === true,
+    rate_limiting_interval: Number(data.rate_limiting_interval ?? 0),
+    rate_limiting_limit: Number(data.rate_limiting_limit ?? 0),
+  };
+}
+
+async function saveAiGateway() {
+  aiGatewaySaving.value = true;
+  try {
+    const { data } = await settingsApi.saveAiGateway(aiGatewayForm.value);
+    aiGatewayForm.value = normalizeAiGatewaySettings(data);
+    message.success('AI Gateway 配置已保存');
+  } finally {
+    aiGatewaySaving.value = false;
+  }
+}
+
+async function syncAiGateway() {
+  if (!aiGatewayForm.value.gateway_id) {
+    message.warning('请先填写 Gateway ID');
+    return;
+  }
+  aiGatewaySyncing.value = true;
+  try {
+    const { data } = await settingsApi.syncAiGateway(aiGatewayForm.value);
+    aiGatewayForm.value = normalizeAiGatewaySettings(data.settings);
+    aiGatewayResults.value = Array.isArray(data.results) ? data.results : [];
+    const failed = aiGatewayResults.value.filter((item) => item.status === 'failed').length;
+    if (failed) {
+      message.warning(`同步完成，${failed} 个账号失败`);
+    } else {
+      message.success('AI Gateway 已同步到所有 AI 账号');
+    }
+  } finally {
+    aiGatewaySyncing.value = false;
   }
 }
 
@@ -234,6 +333,26 @@ const taskNeedsAccount = computed(() => ['kv_cleanup', 'd1_backup', 'r2_cleanup'
 const accountOptions = computed(() =>
   accountStore.accounts.filter((a: any) => a.is_active).map((a: any) => ({ label: a.name, value: a.id }))
 );
+
+const aiGatewayColumns: DataTableColumns<any> = [
+  { title: '账号', key: 'accountName', minWidth: 140 },
+  {
+    title: '状态', key: 'status', width: 100,
+    render: (row) => h(NTag, {
+      size: 'small',
+      type: row.status === 'failed' ? 'error' : row.status === 'skipped' ? 'warning' : 'success',
+    }, { default: () => aiGatewayStatusLabels[row.status as keyof typeof aiGatewayStatusLabels] || row.status }),
+  },
+  { title: 'Cloudflare Account ID', key: 'cloudflareAccountId', minWidth: 220 },
+  { title: '结果', key: 'message', minWidth: 300 },
+];
+
+const aiGatewayStatusLabels = {
+  created: '已创建',
+  updated: '已更新',
+  skipped: '已跳过',
+  failed: '失败',
+};
 
 function onTaskTypeChange() {
   taskConfig.value = { accountId: accountOptions.value[0]?.value || null, namespaceId: '', databaseId: '', bucket: '', maxAgeDays: 30, prefix: '' };

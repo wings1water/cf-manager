@@ -36,3 +36,50 @@ export function getRecentLogs(limit: number = 20): AuditLogWithName[] {
     )
     .all(limit) as AuditLogWithName[];
 }
+
+export interface AiCacheStats {
+  totalTokens: number;
+  cachedTokens: number;
+  totalRequests: number;
+  cacheHitRequests: number;
+  cacheHitRate: number;
+}
+
+function parseNumber(detail: string | null, key: string): number {
+  if (!detail) return 0;
+  const match = detail.match(new RegExp(`${key}:\\s*([0-9,]+)`));
+  if (!match) return 0;
+  return Number(match[1].replace(/,/g, '')) || 0;
+}
+
+export function getAiCacheStatsToday(): AiCacheStats {
+  const rows = getDb()
+    .prepare(
+      `SELECT detail
+       FROM audit_log
+       WHERE action = 'ai_inference'
+         AND status = 'success'
+         AND date(created_at) = date('now')`
+    )
+    .all() as Array<{ detail: string | null }>;
+
+  let totalTokens = 0;
+  let cachedTokens = 0;
+  let cacheHitRequests = 0;
+
+  for (const row of rows) {
+    const total = parseNumber(row.detail, 'tokens');
+    const cached = parseNumber(row.detail, 'cached_tokens');
+    totalTokens += total;
+    cachedTokens += cached;
+    if (cached > 0) cacheHitRequests++;
+  }
+
+  return {
+    totalTokens,
+    cachedTokens,
+    totalRequests: rows.length,
+    cacheHitRequests,
+    cacheHitRate: totalTokens > 0 ? Math.round((cachedTokens / totalTokens) * 10000) / 100 : 0,
+  };
+}
